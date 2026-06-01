@@ -248,6 +248,11 @@ def _build_sensitivity(
         share_price_matrix.append(price_row)
 
     return {
+        "label": "WACC / Terminal Growth Sensitivity",
+        "description": (
+            "Sensitivity varies only WACC and terminal growth. "
+            "Forecast-period FCFF remains fixed from the base case."
+        ),
         "wacc_axis": wacc_axis,
         "growth_axis": growth_axis,
         "enterprise_value_matrix": enterprise_value_matrix,
@@ -480,7 +485,7 @@ def _compute_dcf(
     aligned_ebit_margin = (ebit_series / revenue_series).replace([math.inf, -math.inf], pd.NA).dropna()
     ebit_margin_default = _bounded(_average(aligned_ebit_margin.tolist()[-3:], 0.18), 0.02, 0.50)
 
-    dep_rate_series = (depreciation_series.abs() / ppe_series.abs()).replace([math.inf, -math.inf], pd.NA).dropna()
+    dep_rate_series = (depreciation_series.abs() / revenue_series.abs()).replace([math.inf, -math.inf], pd.NA).dropna()
     depreciation_rate_default = _bounded(_average(dep_rate_series.tolist()[-3:], 0.04), 0.01, 0.15)
 
     capex_percent_series = (capex_series.abs() / revenue_series.abs()).replace([math.inf, -math.inf], pd.NA).dropna()
@@ -533,13 +538,14 @@ def _compute_dcf(
 
     forecast_rows: list[dict[str, float]] = []
     pv_fcff_total = 0.0
+    warnings: list[str] = []
 
     for year in range(1, FORECAST_YEARS + 1):
         revenue = revenue * (1 + assumptions["revenue_growth_rate"])
         ebit = revenue * assumptions["ebit_margin"]
         nopat = ebit * (1 - assumptions["tax_rate"])
 
-        depreciation = opening_ppe * assumptions["depreciation_rate"]
+        depreciation = revenue * assumptions["depreciation_rate"]
         capex = revenue * assumptions["capex_percent"]
         closing_ppe = opening_ppe + capex - depreciation
 
@@ -573,6 +579,11 @@ def _compute_dcf(
         opening_ppe = closing_ppe
 
     final_fcff = forecast_rows[-1]["fcff"]
+    if final_fcff <= 0:
+        warnings.append(
+            "Final forecast-year FCFF is non-positive, so the Gordon-growth terminal value may be negative or unreliable."
+        )
+
     terminal_value = final_fcff * (1 + assumptions["terminal_growth_rate"]) / (
         assumptions["wacc"] - assumptions["terminal_growth_rate"]
     )
@@ -622,6 +633,7 @@ def _compute_dcf(
         "query": ticker_symbol,
         "assumptions": assumptions,
         "defaulted_fields": defaulted_fields,
+        "warnings": warnings,
         "forecast": _sanitize_json_value(forecast_rows),
         "valuation": {
             "pv_fcff_sum": pv_fcff_total,
